@@ -1,0 +1,128 @@
+# ZCode 命令行版（TUI / Web B/S 模式）Docker 构建文件。
+#
+# 不写 `# syntax=docker/dockerfile:1.x` 指令：Docker 23+ 内置前端已支持本文使用的
+# 全部特性（cache mount、COPY --chmod、多阶段），也避免额外从 docker.io 拉取前端镜像。
+#
+# 目标环境：x86_64 Linux 宿主（Ubuntu 等任意发行版）。镜像自带 Debian bookworm 用户态，
+# 构建与运行全部发生在容器内，宿主机只需要 Docker，不安装任何工具链。
+#
+# 三个 target：
+#   runtime（默认，无 --target 时）：B/S 运行镜像，`zcode --web` 启动 Web 界面 + HTTP/WS 后端 + Agent；
+#   export：导出官方发行包 zcode-<version>.tar.gz（等价 `pnpm build:zcode`）到宿主目录；
+#   builder：中间构建阶段，一般不单独使用。
+#
+# 推荐入口：scripts/zcode-docker.sh（薄封装，仅做环境检查与 docker 调用）。
+# 完整引导文档：docs/zcode-docker-web-guide.md。
+
+# ---------------------------------------------------------------------------
+# builder：pnpm install + 官方 `pnpm build:zcode`，发行目录落到 /out/zcode
+# ---------------------------------------------------------------------------
+# 基础镜像可整体覆盖（Docker Hub 不可达网络用镜像源前缀，如
+# NODE_BUILD_IMAGE=docker.m.daocloud.io/library/node:24.14.0-bookworm）。
+# 注意：FROM 行只能引用第一个 FROM 之前声明的全局 ARG。
+ARG NODE_BUILD_IMAGE=node:24.14.0-bookworm
+ARG NODE_RUNTIME_IMAGE=node:24.14.0-bookworm-slim
+FROM ${NODE_BUILD_IMAGE} AS builder
+
+# Node/pnpm 版本以仓库 mise.toml 为准。
+ARG PNPM_VERSION=10.33.2
+# build:zcode 强制要求下载根地址；只写入 install.sh/latest.json 元数据，不影响镜像运行，
+# 将发行包发布到自建下载站时替换为实际地址。
+ARG ZCODE_DIST_BASE_URL=https://downloads.example.com/zcode/
+# 产品环境分流（provider 内置配置与 Web 端点按 test/production 选择），默认与官方发布一致。
+ARG ZCODE_ENV=production
+# 与 mise.toml 保持一致，加速容器内 electron devDependency 下载；可按网络环境覆盖。
+ARG ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
+# 非空时覆盖仓库 .npmrc 的 registry（网络受限环境可指向镜像源）。
+ARG NPM_REGISTRY=
+
+ENV CI=1 \
+    HUSKY=0 \
+    TURBO_TELEMETRY_DISABLED=1 \
+    TURBO_CACHE_DIR=/turbo-cache \
+    ELECTRON_CACHE=/.electron-cache \
+    electron_config_cache=/.electron-cache \
+    ELECTRON_MIRROR=${ELECTRON_MIRROR} \
+    ZCODE_ENV=${ZCODE_ENV} \
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+    NODE_OPTIONS=--max-old-space-size=8192
+
+RUN corepack enable && corepack prepare "pnpm@${PNPM_VERSION}" --activate
+
+WORKDIR /src
+
+# 源码 COPY 进 builder 中间层（该阶段不对外发布；runtime/export 只提取产物 tar 包，
+# 最终镜像不含仓库源码）。构建上下文受 .dockerignore 约束（排除 .git、node_modules、.env* 等）。
+# 缓存卷跨次构建复用：pnpm store（依赖下载）、electron 二进制、turbo 增量编译，
+# 源码改动后的重建无需重新下载依赖。构建产物统一落到 /out。
+COPY . .
+RUN --mount=type=cache,id=zcode-docker-pnpm-store,target=/pnpm/store \
+    --mount=type=cache,id=zcode-docker-electron-cache,target=/.electron-cache \
+    --mount=type=cache,id=zcode-docker-turbo-cache,target=/turbo-cache \
+    set -eux; \
+    pnpm config set store-dir /pnpm/store; \
+    if [ -n "$NPM_REGISTRY" ]; then pnpm config set registry "$NPM_REGISTRY"; fi; \
+    pnpm install --frozen-lockfile; \
+    # build:zcode 的 TUI runtime 闭包经由 @zcode/contracts 依赖仓库根 @zcode/shared 与
+    # @zcode/model-option-map（见 docs/cli-ci-packaging.md 构建契约：shared 无 build 脚本，
+    # 必须先显式编译，SEA 资产收集要求 dist/index.js 存在）。
+    pnpm --filter @zcode/model-option-map build; \
+    pnpm exec tsc -b packages/shared; \
+    pnpm build:zcode --base-url "$ZCODE_DIST_BASE_URL" --out-dir /out/zcode; \
+    find /out/zcode/releases -name 'zcode-*.tar.gz' -print
+
+# ---------------------------------------------------------------------------
+# export：官方发行包导出（FROM scratch，仅产物层），配合 --output type=local 使用
+# ---------------------------------------------------------------------------
+FROM scratch AS export
+COPY --from=builder /out/zcode/ /
+
+# ---------------------------------------------------------------------------
+# runtime（默认 target）：B/S 模式服务镜像
+# ---------------------------------------------------------------------------
+FROM ${NODE_RUNTIME_IMAGE} AS runtime
+
+LABEL org.opencontainers.image.title="zcode-web" \
+      org.opencontainers.image.description="ZCode CLI distribution running in browser/server mode (zcode --web)"
+
+# 数据与工作区约定（详见 docs/zcode-docker-web-guide.md）：
+#   /data       应用数据基目录（HOME 与 ZCODE_DATA_BASE_DIR，实际数据在 /data/.zcode），建议挂命名卷；
+#   /workspace  默认工作区，建议 bind mount 宿主项目目录。
+ENV HOME=/data \
+    ZCODE_DATA_BASE_DIR=/data
+
+# git/openssh-client：Agent 会话中的仓库操作；procps：ps 等进程工具；tini：PID 1 子进程回收。
+# slim 镜像不带 ca-certificates：先用默认 HTTP 源装上证书，再把源切到 HTTPS
+# （避免 HTTP 代理误拦带 URL 编码的包路径，同 Dockerfile.desktop-e2e）安装其余包。
+RUN apt-get update -qq && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources && \
+    apt-get update -qq && \
+    apt-get install -y --no-install-recommends \
+      git \
+      openssh-client \
+      procps \
+      tini && \
+    rm -rf /var/lib/apt/lists/*
+
+# 官方发行包：web 静态资源 + HTTP/WS server + Agent（含各平台原生依赖与 TUI 运行时）。
+COPY --from=builder /out/zcode/releases/*/zcode-*.tar.gz /tmp/
+# 官方 node 镜像自带非 root 用户 node（uid 1000），直接复用，不再自建用户。
+RUN mkdir -p /opt && \
+    tar -xzf /tmp/zcode-*.tar.gz -C /opt && \
+    rm -f /tmp/zcode-*.tar.gz && \
+    ln -s /opt/zcode/bin/zcode.mjs /usr/local/bin/zcode && \
+    mkdir -p /data /workspace && \
+    chown node:node /data /workspace
+
+COPY --chmod=0755 scripts/zcode-distribution/docker-entrypoint.sh /usr/local/bin/zcode-web-entrypoint
+
+WORKDIR /workspace
+USER node
+EXPOSE 3030
+
+# `/` 返回静态 index.html，不经过 token 鉴权（仅 /api、/ws 鉴权），足以探测服务存活。
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD ["node", "-e", "fetch('http://127.0.0.1:'+(process.env.ZCODE_WEB_PORT||'3030')+'/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/zcode-web-entrypoint"]

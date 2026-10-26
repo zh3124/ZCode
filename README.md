@@ -212,6 +212,8 @@ node dist/zcode/debug/zcode/bin/zcode.mjs --web \
 
 浏览器打开 `http://127.0.0.1:3030`，即可验证同一后端服务托管 Web 页面和 Agent 的完整链路。该端口需要空闲；如正在运行 `pnpm dev:web`，可改用其他 `--port`。
 
+在 x86_64 Ubuntu 等 Linux 宿主上，也可以仅凭 Docker 完成上述发行包的构建，并以 B/S 模式（`zcode --web`）容器化运行，见 [ZCode 命令行版 Docker 构建与 B/S 运行指南](docs/zcode-docker-web-guide.md)。
+
 ## 仓库结构
 
 | 目录                                                 | 职责                                       |
