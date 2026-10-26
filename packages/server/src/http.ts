@@ -34,6 +34,7 @@ import {
   ZCODE_RPC_HOST_CAPABILITY_HEADER,
   ZCODE_COMPATIBILITY_MANIFEST,
   ZCODE_VERSION,
+  buildServerRemoteWorkspaceIdentity,
   type BotProvider,
   type ServerRemoteInfo,
   type ServerRemoteWorkspaceInfo,
@@ -165,7 +166,10 @@ export function resolveHttpServerId(options: HttpServerOptions = {}): string {
   );
 }
 
-function resolveServerWorkspaces(options: HttpServerOptions): ServerRemoteWorkspaceInfo[] {
+function resolveServerWorkspaces(
+  options: HttpServerOptions,
+  serverId: string,
+): ServerRemoteWorkspaceInfo[] {
   if (options.workspaces) {
     return options.workspaces;
   }
@@ -174,20 +178,24 @@ function resolveServerWorkspaces(options: HttpServerOptions): ServerRemoteWorksp
     {
       path: workspacePath,
       label: basename(workspacePath) || workspacePath,
+      // Web 端依赖该身份识别「当前服务器自身」：缺失时 UI 无法区分本机项目与远端设备
+      // 项目，保存成功的项目会被误判 host-removed（remote-project.host-removed）。
+      workspaceIdentity: buildServerRemoteWorkspaceIdentity({ serverId, workspacePath }),
     },
   ];
 }
 
 function createServerInfo(options: HttpServerOptions): ServerRemoteInfo {
+  const serverId = resolveHttpServerId(options);
   return serverRemoteInfoOutputSchema.parse({
-    serverId: resolveHttpServerId(options),
+    serverId,
     ...(options.name?.trim() || readTrimmedEnv("ZCODE_SERVER_NAME")
       ? { name: options.name?.trim() || readTrimmedEnv("ZCODE_SERVER_NAME") }
       : {}),
     version: ZCODE_VERSION,
     protocolVersion: SERVER_REMOTE_PROTOCOL_VERSION,
     authRequired: options.authRequired ?? Boolean(readTrimmedEnv("ZCODE_SERVER_TOKEN")),
-    workspaces: resolveServerWorkspaces(options),
+    workspaces: resolveServerWorkspaces(options, serverId),
     compatibility: ZCODE_COMPATIBILITY_MANIFEST,
     migration: { failedPathCount: options.migrationFailedPathCount ?? 0 },
     identity: { osUser: userInfo().username, hostname: hostname() },
