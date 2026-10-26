@@ -107,6 +107,13 @@ import {
   startWsKeepAlive,
   type WsKeepAliveHandle,
 } from "#src/webSocketKeepAlive.js";
+import {
+  consumeRestoredView,
+  persistForReload,
+  type WebSessionRestoreView,
+} from "#src/webSessionRestore.js";
+import { getActiveTabStoreInstance } from "@zcode/ui/tab-store-provider";
+import { useZCodeSessionStore } from "@zcode/ui/session-store";
 
 import {
   WebRemoteControlDeviceListPage,
@@ -716,6 +723,27 @@ function resolveDefaultWsOrigin(): string {
   return `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`;
 }
 
+/**
+ * 断线恢复位置记忆的读取源：活动 workspace（tab store）× 该 workspace 的
+ * activeTaskId（session store）。两者组合即 shell 会话视图（shellWorkbenchBinding）
+ * 的派生输入，与界面所见严格一致；草稿/主页态返回 null。
+ */
+function resolveActiveConversation(): WebSessionRestoreView | null {
+  const tabState = getActiveTabStoreInstance()?.getState();
+  const workspacePath = tabState?.activeWorkspacePath?.trim();
+  if (!tabState || !workspacePath) return null;
+  const workspaceIdentity = tabState.activeWorkspaceIdentity?.trim() || undefined;
+  const taskId = useZCodeSessionStore
+    .getState()
+    .getWorkspaceState(workspacePath, workspaceIdentity).activeTaskId;
+  if (!taskId) return null;
+  return {
+    taskId,
+    workspacePath,
+    ...(workspaceIdentity ? { workspaceIdentity } : {}),
+  };
+}
+
 async function resolveWebBootstrap(): Promise<WebBootstrapResult> {
   const params = new URLSearchParams(window.location.search);
   const remoteId = params.get("remote");
@@ -760,8 +788,7 @@ function selectInitialWebRemoteControlWorkspace(
   return resolveWebRemoteControlInitialWorkspaceSelection(snapshot);
 }
 
-function isWebRemoteControlRoute(): boolean {
-  return (
+function isWebRemoteControlRoute(): boolean {  return (
     matchesWebRemoteControlRoutePath(window.location.pathname, "/remote/v4") ||
     matchesWebRemoteControlRoutePath(
       window.location.pathname,
@@ -2133,6 +2160,11 @@ async function bootstrapWebApp() {
       sendPing: () => services.systemService.info(),
       recover: (reason) => {
         console.warn("[web] WebSocket 连接失效，自动刷新恢复", { reason });
+        // 恢复前记住当前会话：活动 workspace（tab store）× 该 workspace 的
+        // activeTaskId（session store）＝ shell 会话视图的唯一事实（见
+        // WorkspaceShellLayout 的 shellWorkbenchBinding 派生）。草稿/主页态
+        // （activeTaskId 为空）不记录，reload 后回主页。
+        persistForReload(resolveActiveConversation());
         window.location.reload();
       },
     });
@@ -2146,6 +2178,13 @@ async function bootstrapWebApp() {
         );
     }
 
+    // 消费恢复记录放在连接成功之后：恢复期服务端短暂不可用（boot 失败渲染
+    // 失败页）不消耗记录，服务恢复后的首次成功 boot 仍能回到原会话。
+    // identity 原样透传（可为 undefined）：死亡前的 workspace tab 若按路径键
+    // （无 identity），恢复也必须无 identity；不能兜底为服务器根 workspace 的
+    // identity，否则 tab/会话桶键错位，视图解析失败回退欢迎屏。
+    const restoredView = consumeRestoredView();
+
     root.render(
       <AppErrorBoundary>
         <ZCodeIntlProvider
@@ -2155,10 +2194,13 @@ async function bootstrapWebApp() {
           <Root
             services={services}
             platform={platform}
-            initialWorkspaceAbsPath={bootstrap.initialWorkspaceAbsPath}
-            initialWorkspaceIdentity={bootstrap.initialWorkspaceIdentity}
-            initialTaskId={bootstrap.initialTaskId}
-            restoreSession={bootstrap.restoreSession}
+            initialWorkspaceAbsPath={restoredView?.workspacePath ?? bootstrap.initialWorkspaceAbsPath}
+            initialWorkspaceIdentity={restoredView ? restoredView.workspaceIdentity : bootstrap.initialWorkspaceIdentity}
+            initialTaskId={restoredView?.taskId ?? bootstrap.initialTaskId}
+            // 开启原生 tab 会话恢复：settingService 的 lastWorkspaceSession +
+            // lastActiveTabIndex 在 boot 时还原工作区 tabs 并激活上次所在
+            // workspace（web 直连此前从未开启；配合上面的任务恢复回到原会话）。
+            restoreSession={bootstrap.restoreSession ?? true}
             allowOpenWorkspace={bootstrap.allowOpenWorkspace}
             preferDirectoryBrowser
             supportsEmbeddedBrowser={false}

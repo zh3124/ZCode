@@ -17,11 +17,22 @@ declare global {
 const TabStoreContext = createContext<TabStore | null>(null);
 const fallbackTabStore = createTabStore(null);
 
+// 最近挂载的 tab store 实例：仅供 web 入口在 React 树外读取当前活动
+// workspace（zcode --web 断线恢复的位置记忆，见 webSessionRestore）。
+// 桌面多窗口会互相覆盖该引用，任何桌面代码不得依赖此 getter。
+let latestTabStoreInstance: TabStore | null = null;
+
+/** React 树外读取当前活动 workspace 的唯一入口；无挂载实例时返回 null。 */
+export function getActiveTabStoreInstance(): TabStore | null {
+  return latestTabStoreInstance;
+}
+
 export function TabStoreProvider({ children }: { children: ReactNode }) {
   // 只在首次渲染时创建 store，避免 HMR 重复创建
   const storeRef = useRef<TabStore | null>(null);
   if (!storeRef.current) {
     storeRef.current = createTabStore();
+    latestTabStoreInstance = storeRef.current;
   }
 
   useEffect(() => {
