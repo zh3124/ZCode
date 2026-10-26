@@ -1983,8 +1983,16 @@ export function SessionPane({
                   // 会话已创建；组织失败不能向发送层抛错，否则会诱导用户再发一次。
                   // 重试闭包只持有这次创建的地址和 placement，绝不调用 createSession。
                   logger.error("[task-groups] 新任务归属提交失败", cause);
+                  // 限时自动消失（与 OffPeak/Automations 等可操作 Toast 的 8s 惯例一致）：
+                  // 无项目会话等场景下重试永远不会成功，持久 Toast 会一直滞留界面。
+                  // variant: "info" 必须显式指定：toast.tsx 只在 info/warning/update/
+                  // source-server-update 分支渲染操作按钮与 × 关闭，默认变体只渲染
+                  // 纯文本（此前 actionLabel/dismissible 一直是死配置，重试按钮从未出现）。
                   toast(intl.formatMessage({ id: "taskGroup.failed" }), {
-                    durationMs: 0,
+                    durationMs: 8000,
+                    variant: "info",
+                    dismissible: true,
+                    dismissLabel: intl.formatMessage({ id: "common.close" }),
                     actionLabel: intl.formatMessage({ id: "taskGroup.retryPlacement" }),
                     onAction: () => void attempt(),
                     dedupeKey: `task-group:${createdSessionId}`,
