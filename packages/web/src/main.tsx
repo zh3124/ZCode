@@ -34,6 +34,8 @@ import {
 
 import { WebCallbackPage } from "./auth/WebCallbackPage.js";
 import { WebLoginPage } from "./auth/WebLoginPage.js";
+import { TokenGatePage } from "./auth/TokenGatePage.js";
+import { stripTokenQuery, verifyLiteTokenViaServerInfo } from "./auth/tokenGate.js";
 import { createWebAuthService } from "./auth/webAuthService.js";
 import { WEB_ZAI_OAUTH_CONFIG, resolveWebAuthDevReturnTo } from "./auth/webZaiOAuthConfig.js";
 import { parseOAuthState, resolveSafeAppReturnTo } from "./auth/oauthStateCodec.js";
@@ -251,6 +253,8 @@ interface WebRemoteControlPlatformProxy {
 
 interface WebBootstrapResult {
   wsUrl: string;
+  // server-info 返回 401：服务器开启了令牌认证且当前无有效凭证，需要先过令牌输入页。
+  authRequired?: boolean;
   initialWorkspaceAbsPath?: string;
   initialWorkspaceIdentity?: string;
   initialTaskId?: string;
@@ -397,6 +401,36 @@ async function renderConversationSharePage(): Promise<void> {
 function renderWebLoginPage(): void {
   document.title = "ZCode - Web Remote Control Sign In";
   root.render(<WebLoginPage onLogin={(provider) => remoteEntry.startLogin(provider)} />);
+}
+
+// 验证通过后从地址栏移除 ?token=（用户可能带着失效 token 的链接进来），
+// 避免令牌长期留在历史记录；其余查询参数（remote 等）原样保留。
+function stripTokenQueryFromAddressBar(): void {
+  try {
+    const cleaned = stripTokenQuery(window.location.href);
+    if (cleaned !== window.location.href) {
+      window.history.replaceState(window.history.state, "", cleaned);
+    }
+  } catch {
+    // History API 不可用时忽略，不影响进入应用。
+  }
+}
+
+// zcode --web 令牌门页：复用 server 侧 /api/server-info?token= 的「校验并种 cookie」
+// 契约，不新增后端接口；cookie（HttpOnly、30 天滑动续期）由浏览器自动持久化。
+function renderTokenGatePage(onGranted: () => void): void {
+  document.title = "ZCode - Web Sign In";
+  root.render(
+    <TokenGatePage
+      onVerify={(token) =>
+        verifyLiteTokenViaServerInfo((input, init) => window.fetch(input, init), token)
+      }
+      onGranted={() => {
+        stripTokenQueryFromAddressBar();
+        onGranted();
+      }}
+    />,
+  );
 }
 
 // 访问 window.localStorage 本身在部分浏览器会抛错，统一包在方法里交给调用方兜底。
@@ -693,6 +727,12 @@ async function resolveWebBootstrap(): Promise<WebBootstrapResult> {
     const response = await fetch("/api/server-info", {
       cache: "no-store",
     });
+    if (response.status === 401) {
+      // 令牌认证模式且无有效 cookie：显式进入令牌输入页。
+      // 旧实现在这里静默降级成裸 wsUrl，最终以不透明的 WS 失败收场，
+      // 用户无法区分「令牌不对」和「服务不可达」。
+      return { wsUrl, authRequired: true };
+    }
     if (!response.ok) {
       return { wsUrl };
     }
@@ -2061,6 +2101,14 @@ async function bootstrapWebApp() {
             error instanceof Error ? error.message : String(error),
           ),
     );
+    return;
+  }
+
+  if (bootstrap.authRequired) {
+    // 令牌验证通过后重跑整个 bootstrap：cookie 已就位，server-info 会返回完整工作区信息。
+    renderTokenGatePage(() => {
+      void bootstrapWebApp();
+    });
     return;
   }
 

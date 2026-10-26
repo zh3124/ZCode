@@ -128,6 +128,69 @@ describe("server info HTTP endpoint", () => {
     });
   });
 
+  it("persists a Max-Age cookie and round-trips special-char tokens", async () => {
+    // --token 传入的固定令牌可能含 +、/、= 等字符：Set-Cookie 存 encodeURIComponent
+    // 编码值，浏览器原样回传，读取侧必须兼容解码后比对，否则 cookie 永远失配。
+    const token = "fixed+token/with=special";
+    const server = createHttpServer(new ServiceCollection(), 0, {
+      authToken: token,
+    });
+    servers.push(server);
+    const address = server.address() as AddressInfo;
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const accepted = await fetch(`${baseUrl}/api/server-info?token=${encodeURIComponent(token)}`);
+    expect(accepted.status).toBe(200);
+    const setCookie = accepted.headers.get("set-cookie") ?? "";
+    expect(setCookie).toContain("Max-Age=");
+    expect(setCookie).toContain(encodeURIComponent(token));
+
+    // 浏览器回传编码后的 cookie 值必须通过鉴权，并滑动续期（重下发 Max-Age cookie）。
+    const cookieAccepted = await fetch(`${baseUrl}/api/server-info`, {
+      headers: { cookie: `zcode_lite_token=${encodeURIComponent(token)}` },
+    });
+    expect(cookieAccepted.status).toBe(200);
+    expect(cookieAccepted.headers.get("set-cookie")).toContain("Max-Age=");
+
+    // 历史上以原始值写入的 cookie（如手工设置）保持兼容。
+    const rawAccepted = await fetch(`${baseUrl}/api/server-info`, {
+      headers: { cookie: `zcode_lite_token=${token}` },
+    });
+    expect(rawAccepted.status).toBe(200);
+
+    const rejected = await fetch(`${baseUrl}/api/server-info`, {
+      headers: { cookie: "zcode_lite_token=wrong-token" },
+    });
+    expect(rejected.status).toBe(401);
+  });
+
+  it("seeds the auth cookie from a tokenized static entry request", async () => {
+    // 生产入口是浏览器打开 /?token=xxx：静态路径本身不鉴权，但必须借这次
+    // 请求种下持久 cookie，后续 /api 与 /ws 才能免 token 访问。
+    const staticRoot = await mkdtemp(join(tmpdir(), "zcode-lite-auth-static-"));
+    tempDirs.push(staticRoot);
+    await writeFile(join(staticRoot, "index.html"), "<html>lite</html>", "utf8");
+
+    const server = createHttpServer(new ServiceCollection(), 0, {
+      authToken: "secret-token",
+      staticRoot,
+      spaFallback: true,
+    });
+    servers.push(server);
+    const address = server.address() as AddressInfo;
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const unauthenticatedPage = await fetch(`${baseUrl}/`);
+    expect(unauthenticatedPage.status).toBe(200);
+    expect(unauthenticatedPage.headers.get("set-cookie")).toBeNull();
+
+    const bootstrappedPage = await fetch(`${baseUrl}/?token=secret-token`);
+    expect(bootstrappedPage.status).toBe(200);
+    const setCookie = bootstrappedPage.headers.get("set-cookie") ?? "";
+    expect(setCookie).toContain("zcode_lite_token=secret-token");
+    expect(setCookie).toContain("Max-Age=");
+  });
+
   it("does not expose either retired remote-connect route", async () => {
     const server = createHttpServer(new ServiceCollection(), 0);
     servers.push(server);

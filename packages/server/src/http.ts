@@ -210,6 +210,12 @@ function createServerInfo(options: HttpServerOptions): ServerRemoteInfo {
 
 const zcodeLiteTokenCookieName = "zcode_lite_token";
 
+// Bugfix：原 Set-Cookie 无 Max-Age，属于会话 cookie，浏览器重启即丢，
+// 固定令牌（--token）用户也被迫每次访问都带 ?token= 引导。改为 30 天持久
+// cookie 并在受保护路径（/api、/ws）鉴权成功时滑动续期：活跃使用不中断，
+// 连续 30 天不访问才需要重新用带 token 的链接引导一次。
+const zcodeLiteTokenCookieMaxAgeSeconds = 60 * 60 * 24 * 30;
+
 const staticMimeTypes: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
   ".gif": "image/gif",
@@ -248,7 +254,36 @@ function parseCookieHeader(header: string | undefined): Map<string, string> {
   return cookies;
 }
 
-function hasValidLiteToken(c: Context, token: string): boolean {
+function issueLiteTokenCookie(c: Context, token: string): void {
+  c.header(
+    "Set-Cookie",
+    `${zcodeLiteTokenCookieName}=${encodeURIComponent(token)}; Path=/; Max-Age=${zcodeLiteTokenCookieMaxAgeSeconds}; HttpOnly; SameSite=Lax`,
+  );
+}
+
+function matchesLiteTokenCookie(cookieValue: string | undefined, token: string): boolean {
+  if (!cookieValue) {
+    return false;
+  }
+  if (cookieValue === token) {
+    return true;
+  }
+  // Bugfix：Set-Cookie 写入的是 encodeURIComponent 编码值，而浏览器回传的
+  // cookie 值不做任何解码，直接与原始 token 比较永远失配——含 +、/、= 等
+  // 字符的固定令牌 cookie 形同虚设。兼容解码后的值；% 序列非法时
+  // decodeURIComponent 抛错，按不匹配处理。
+  try {
+    return decodeURIComponent(cookieValue) === token;
+  } catch {
+    return false;
+  }
+}
+
+function hasValidLiteToken(
+  c: Context,
+  token: string,
+  options: { refreshCookie?: boolean } = {},
+): boolean {
   const authorization = c.req.header("authorization");
   if (
     authorization?.startsWith("Bearer ") &&
@@ -258,13 +293,19 @@ function hasValidLiteToken(c: Context, token: string): boolean {
   }
   const url = new URL(c.req.url);
   if (url.searchParams.get("token") === token) {
-    c.header(
-      "Set-Cookie",
-      `${zcodeLiteTokenCookieName}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax`,
-    );
+    // ?token= 命中即种/续 cookie：这是唯一的引导入口（静态首页不鉴权，
+    // 首次访问必须在这里下发凭证）。
+    issueLiteTokenCookie(c, token);
     return true;
   }
-  return parseCookieHeader(c.req.header("cookie")).get(zcodeLiteTokenCookieName) === token;
+  const cookieValue = parseCookieHeader(c.req.header("cookie")).get(zcodeLiteTokenCookieName);
+  if (matchesLiteTokenCookie(cookieValue, token)) {
+    if (options.refreshCookie !== false) {
+      issueLiteTokenCookie(c, token);
+    }
+    return true;
+  }
+  return false;
 }
 
 function isTokenProtectedPath(pathname: string): boolean {
@@ -360,8 +401,11 @@ export function createHttpServer(
   if (authToken) {
     app.use("*", async (c, next) => {
       const pathname = new URL(c.req.url).pathname;
-      const validToken = hasValidLiteToken(c, authToken);
-      if (!isTokenProtectedPath(pathname) || validToken) {
+      const protectedPath = isTokenProtectedPath(pathname);
+      // 静态资源不强制鉴权，但带 ?token= 的引导访问仍要在这里种 cookie；
+      // cookie 滑动续期只发生在受保护路径的活跃使用上，避免给
+      // immutable 静态资源响应附加 Set-Cookie 影响缓存语义。
+      if (!protectedPath || hasValidLiteToken(c, authToken, { refreshCookie: protectedPath })) {
         await next();
         return;
       }
@@ -465,6 +509,16 @@ export function createHttpServer(
       const filePath = await resolveStaticFile(staticRoot, pathname, options.spaFallback ?? true);
       if (!filePath) {
         return c.notFound();
+      }
+      // 生产入口 /?token= 是浏览器首次访问的唯一引导链路：静态首页本身不鉴权，
+      // 必须在入口文档上种 cookie（否则用户只能一直携带 ?token=，令牌留在历史
+      // 记录）。仅限入口文档（no-cache 的 index.html）；带指纹的静态资源响应
+      // 不带 Set-Cookie，避免影响 immutable 缓存语义。
+      if (authToken && filePath.endsWith("index.html")) {
+        const entryToken = new URL(c.req.url).searchParams.get("token");
+        if (entryToken !== null && entryToken === authToken) {
+          issueLiteTokenCookie(c, authToken);
+        }
       }
       return c.body(await readFile(filePath), 200, {
         "Cache-Control": filePath.endsWith("index.html")
