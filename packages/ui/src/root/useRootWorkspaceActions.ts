@@ -1,4 +1,5 @@
 import { stageV4ComposerDraftAttachments } from "@/v4/composer/composerDraftWorkspaceTransfer.js";
+import { isSelfServerHost, useSelfServerHostId } from "@/hooks/useWorkspaceServices.js";
 import { readProjectSidebarView } from "@/project-sidebar/index.js";
 /* eslint-disable max-lines -- Root workspace action hook 集中编排项目、远程和 conversation 入口；合并期保持动作边界完整，后续按领域拆分。 */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -170,6 +171,7 @@ export function useRootWorkspaceActions({
   }, [workbenchGroupClientMode]);
 
   const composerClientNamespace = useComposerClientNamespace();
+  const selfServerHostId = useSelfServerHostId();
   const startDraftInWorkspace = useCallback(
     (workspacePath: string, workspaceIdentity?: string, options?: CreateTaskOptions) => {
       const projectId =
@@ -367,7 +369,10 @@ export function useRootWorkspaceActions({
             : {}),
         });
         if (!isCurrent()) return;
-        if (hostId && hostId !== "local") {
+        // zcode --web 下项目落库 hostId 是 Source Server 自身身份；导航必须走本机
+        // addTab 分支（workspace 身份由服务解析层按本机处理），不能进入远端连接导航。
+        const selfHostNavigation = !hostId || isSelfServerHost(hostId, selfServerHostId);
+        if (hostId && !selfHostNavigation) {
           if (!target.workspaceIdentity || !openRemoteProjectWorkspace)
             throw new Error("project.remote-navigation-unavailable");
           await openRemoteProjectWorkspace({
@@ -380,7 +385,7 @@ export function useRootWorkspaceActions({
           });
         }
         // 目录准备成功才提交导航；失败保留当前会话和分屏。
-        if (!hostId || hostId === "local")
+        if (selfHostNavigation)
           addTab(target.workspacePath, {
             workspacePurpose: target.projectId ? "project" : "conversation",
             ...(target.workspaceIdentity ? { workspaceIdentity: target.workspaceIdentity } : {}),
@@ -406,6 +411,7 @@ export function useRootWorkspaceActions({
     [
       services.projectService,
       composerClientNamespace,
+      selfServerHostId,
       activeWorkspacePath,
       activeWorkspaceIdentity,
       tabStoreApi,

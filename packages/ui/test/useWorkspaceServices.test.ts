@@ -2,6 +2,8 @@ import { describe, expect, it, beforeEach, vi } from "vitest";
 import type { IServiceAccessor } from "@zcode/services";
 import type { RemoteTarget } from "@zcode/shared";
 import {
+  isSelfServerHost,
+  isSelfServerWorkspaceIdentity,
   resolveBaseWorkspaceServices,
   resolveWorkspaceServiceIsRemoteTarget,
   resolveWorkspaceServicesForTarget,
@@ -995,5 +997,66 @@ describe("isWorkspaceTab", () => {
       label: "settings",
     };
     expect(isWorkspaceTab(tab)).toBe(false);
+  });
+});
+
+describe("resolveWorkspaceServiceIsRemoteTarget self server identities", () => {
+  const SELF_HOST = "remote:server:zh-vm";
+
+  it("treats the source server's own identity as a local target in browser-direct mode", () => {
+    // zcode --web：任务的 workspace 身份就是当前 Source Server 自身，必须按本机解析，
+    // 否则会话会永远停在「设备未连接」（remote-waiting）。
+    expect(
+      resolveWorkspaceServiceIsRemoteTarget({
+        workspacePath: "/home/zh/codespace/ZCode",
+        workspaceIdentity: `${SELF_HOST}:/home/zh/codespace/ZCode`,
+        selfServerHostId: SELF_HOST,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps other remote identities as remote targets", () => {
+    expect(
+      resolveWorkspaceServiceIsRemoteTarget({
+        workspacePath: "/srv/app",
+        workspaceIdentity: "remote:server:other-host:/srv/app",
+        selfServerHostId: SELF_HOST,
+      }),
+    ).toBe(true);
+    expect(
+      resolveWorkspaceServiceIsRemoteTarget({
+        workspacePath: "/root",
+        workspaceIdentity: "remote:ssh:dev:22:root:/root",
+        selfServerHostId: SELF_HOST,
+      }),
+    ).toBe(true);
+  });
+
+  it("falls back to the original semantics when the self identity is absent", () => {
+    // 桌面端与远控模式不注册自身身份，行为必须与修复前完全一致。
+    expect(
+      resolveWorkspaceServiceIsRemoteTarget({
+        workspacePath: "/root",
+        workspaceIdentity: "remote:ssh:dev:22:root:/root",
+      }),
+    ).toBe(true);
+    expect(resolveWorkspaceServiceIsRemoteTarget({ workspacePath: "/home/dev/project" })).toBe(
+      false,
+    );
+  });
+
+  it("matches the self host id and identities under it", () => {
+    expect(isSelfServerWorkspaceIdentity(SELF_HOST, SELF_HOST)).toBe(true);
+    expect(isSelfServerWorkspaceIdentity(`${SELF_HOST}:/home/zh`, SELF_HOST)).toBe(true);
+    expect(isSelfServerWorkspaceIdentity("remote:server:other:/x", SELF_HOST)).toBe(false);
+    expect(isSelfServerWorkspaceIdentity(undefined, SELF_HOST)).toBe(false);
+    expect(isSelfServerWorkspaceIdentity(`${SELF_HOST}:/x`, undefined)).toBe(false);
+  });
+
+  it("treats local and self server projects equally", () => {
+    expect(isSelfServerHost("local", SELF_HOST)).toBe(true);
+    expect(isSelfServerHost(SELF_HOST, SELF_HOST)).toBe(true);
+    expect(isSelfServerHost("remote:server:other", SELF_HOST)).toBe(false);
+    expect(isSelfServerHost(undefined, SELF_HOST)).toBe(false);
   });
 });

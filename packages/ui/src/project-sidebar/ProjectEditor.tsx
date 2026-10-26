@@ -1,4 +1,5 @@
 import { formatProjectError } from "@/project-sidebar/view.js";
+import { isSelfServerHost, useSelfServerHostId } from "@/hooks/useWorkspaceServices.js";
 import { useOptionalProjectDirectory } from "@/project-sidebar/ProjectDirectoryProvider.js";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -136,10 +137,13 @@ export function ProjectEditor({
   const { intl } = useZCodeIntl();
   const sidebar = useOptionalProjectDirectory();
   const platform = useOptionalPlatform();
+  const selfServerHostId = useSelfServerHostId();
   const [selectedDeviceId, setSelectedDeviceId] = useState(defaultDeviceId ?? "local");
   const hostId =
     project?.hostId ?? fixedFolder?.hostId ?? host?.id ?? (devices ? selectedDeviceId : undefined);
-  const remote = Boolean(hostId && hostId !== "local");
+  // zcode --web 下项目落库 hostId 是 Source Server 自身身份；按本机处理，
+  // 不能进入远端设备的连接/浏览分支（否则出现「连接设备」面板并连接失败）。
+  const remote = Boolean(hostId && !isSelfServerHost(hostId, selfServerHostId));
   const msg = (id: string) => intl.formatMessage({ id: `project.${id}` });
   const [name, setName] = useState(
     project?.name ?? (fixedFolder ? getPathLeaf(fixedFolder.path) : ""),
@@ -233,7 +237,7 @@ export function ProjectEditor({
       return;
     }
     // 本地曾统一走 Host 文件列表，绕过系统多选；按项目 Host 与平台能力选入口，不能借当前 tab 判定。
-    if ((hostId && hostId !== "local") || !platform?.selectDirectories) {
+    if (remote || !platform?.selectDirectories) {
       if (remote) {
         setBusy(true);
         try {

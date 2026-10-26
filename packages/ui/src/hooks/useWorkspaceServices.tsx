@@ -86,15 +86,58 @@ function hasRemoteWorkspaceMetadata(tab: WorkspaceServiceTargetTab | null | unde
   );
 }
 
+/**
+ * 身份是否属于当前 Source Server 自身（zcode --web 浏览器直连模式）。
+ * 身份等于自身 hostId，或以「hostId + 路径分隔符」开头（workspace 身份带路径）。
+ */
+export function isSelfServerWorkspaceIdentity(
+  identity: string | null | undefined,
+  selfServerHostId: string | null | undefined,
+): boolean {
+  const value = identity?.trim();
+  if (!value || !selfServerHostId) {
+    return false;
+  }
+  return value === selfServerHostId || value.startsWith(`${selfServerHostId}:`);
+}
+
+/** 项目/任务落库的 hostId 是否属于当前 Source Server 自身。 */
+export function isSelfServerHost(
+  hostId: string | null | undefined,
+  selfServerHostId: string | null | undefined,
+): boolean {
+  if (!hostId) return false;
+  return hostId === "local" || isSelfServerWorkspaceIdentity(hostId, selfServerHostId);
+}
+
+/** 读取当前 Source Server 自身 host 身份；桌面端与远控模式为 null。 */
+export function useSelfServerHostId(): string | null {
+  return useRemoteWorkspaceSessionStore((state) => state.selfServerHostId);
+}
+
 export function resolveWorkspaceServiceIsRemoteTarget(params: {
   workspacePath: string | null | undefined;
   workspaceIdentity?: string | null;
   preferredRemoteSessionId?: string | null;
+  selfServerHostId?: string | null;
   activeWorkspacePath?: string | null;
   activeWorkspaceIdentity?: string | null;
   activeTab?: WorkspaceServiceTargetTab | null;
   workspaceTabs?: readonly WorkspaceServiceTargetTab[];
 }): boolean {
+  // zcode --web 浏览器直连模式：workspace 身份就是当前 Source Server 自身。浏览器与
+  // 服务器共用同一条 /ws 连接（baseServices），不存在也不应等待远端连接会话；这类
+  // 身份必须直接按本机解析，否则会话/会话输入会永远停在「设备未连接」。
+  if (
+    isSelfServerWorkspaceIdentity(params.workspaceIdentity, params.selfServerHostId) ||
+    isSelfServerWorkspaceIdentity(params.activeWorkspaceIdentity, params.selfServerHostId) ||
+    isSelfServerWorkspaceIdentity(
+      params.activeTab?.workspaceIdentity,
+      params.selfServerHostId,
+    )
+  ) {
+    return false;
+  }
   if (params.workspaceIdentity?.trim() || params.preferredRemoteSessionId?.trim()) {
     return true;
   }
@@ -163,6 +206,7 @@ export function useWorkspaceServicesResolution(
   options?: { unscopedServices?: IServiceAccessor; forceUnscoped?: boolean },
 ): WorkspaceServicesResolution {
   const currentContextServices = useServices();
+  const selfServerHostId = useRemoteWorkspaceSessionStore((state) => state.selfServerHostId);
   const resolvedRemoteSessionId = useResolvedRemoteWorkspaceSessionId(
     workspacePath,
     preferredRemoteSessionId,
@@ -174,6 +218,7 @@ export function useWorkspaceServicesResolution(
       workspacePath,
       workspaceIdentity,
       preferredRemoteSessionId,
+      selfServerHostId,
       activeWorkspacePath: state.activeWorkspacePath,
       activeWorkspaceIdentity: state.activeWorkspaceIdentity,
       activeTab: (() => {

@@ -3,7 +3,11 @@ import { useComposerClientNamespace } from "@/hooks/useServices.js";
 import { useOptionalTabStore } from "@/store/TabStoreProvider.js";
 import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 import { useEffect, useRef, useState } from "react";
-import { useOptionalBaseWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
+import {
+  isSelfServerHost,
+  useOptionalBaseWorkspaceServices,
+  useSelfServerHostId,
+} from "@/hooks/useWorkspaceServices.js";
 import { useSourceServerManagementSnapshot } from "@/hooks/useSourceServerManagementSnapshot.js";
 import { logger } from "@/logger.js";
 import { buildAggregatedSourceStatusMap } from "@/lib/remoteConnectionPresentation.js";
@@ -78,6 +82,12 @@ export function ProjectCreation({
   });
   const active = useRef(true);
   const admittedHosts = useRef(new Map(directory.hosts.map((host) => [host.id, host])));
+  // zcode --web（standalone-server）下所有项目都以源服务器身份落库（hostId 形如
+  // remote:server:<id>）。当前服务器自身不是「远端设备」：读目录、保存与成员登记
+  // 都必须按本机处理，否则保存成功的项目会被误判 host-removed（服务端实际已入库），
+  // 或被要求一次不存在的设备连接。桌面端身份为空，行为不变。
+  const selfServerHostId = useSelfServerHostId();
+  const isSelfHost = (hostId: string | undefined) => isSelfServerHost(hostId, selfServerHostId);
   const [connection, setConnection] = useState<{
     device?: ProjectDevice;
     resolve(ready: boolean): void;
@@ -113,7 +123,8 @@ export function ProjectCreation({
         status: host.connectionStatus ?? "offline",
       }));
   const prepareHost = async (hostId: string, isCurrent = () => active.current) => {
-    if (hostId === "local") return;
+    // 当前源服务器自身按本机处理（见 isSelfHost 注释）。
+    if (isSelfHost(hostId)) return;
     const current = (await remoteService.readDirectory()).hosts.find((host) => host.id === hostId);
     if (!active.current || !isCurrent()) throw new Error("project.creation-cancelled");
     const previous = admittedHosts.current.get(hostId);
@@ -142,7 +153,8 @@ export function ProjectCreation({
   };
   const saved = async (project: VirtualProject) => {
     if (!active.current) return;
-    if (project.hostId !== "local") {
+    // 源服务器自身落库的项目（zcode --web 全部项目）不需要远端设备成员登记。
+    if (project.hostId !== "local" && !isSelfHost(project.hostId)) {
       const host = admittedHosts.current.get(project.hostId);
       if (!host) throw new Error("remote-project.host-removed");
       await remoteService.addEntry({

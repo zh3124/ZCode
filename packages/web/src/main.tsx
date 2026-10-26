@@ -1,4 +1,4 @@
-import { mobilePluginDiscoveryTelemetrySchema } from "@zcode/shared";
+import { mobilePluginDiscoveryTelemetrySchema, remoteHostIdFromWorkspaceIdentity } from "@zcode/shared";
 import {
   sessionCreateTelemetrySchema,
   type RendererTelemetryEventPayload,
@@ -100,6 +100,7 @@ import {
   markWebRemoteControlBridgeTaskRead,
   markWebRemoteControlTaskRead,
 } from "#src/web-remote-control/index.js";
+import { useRemoteWorkspaceSessionStore } from "@zcode/ui/remote-workspace-session-store";
 
 import {
   WebRemoteControlDeviceListPage,
@@ -2069,6 +2070,15 @@ async function bootstrapWebApp() {
     });
     const platform = createWebPlatform();
     document.title = "ZCode - Web + Server";
+    // zcode --web 浏览器直连：记录 Source Server 自身身份，供 workspace 服务解析与
+    // 项目 UI 把「服务器自身的 workspace/项目」按本机处理（见 useWorkspaceServices）。
+    if (bootstrap.initialWorkspaceIdentity) {
+      useRemoteWorkspaceSessionStore
+        .getState()
+        .setSelfServerHostId(
+          remoteHostIdFromWorkspaceIdentity(bootstrap.initialWorkspaceIdentity),
+        );
+    }
 
     root.render(
       <AppErrorBoundary>

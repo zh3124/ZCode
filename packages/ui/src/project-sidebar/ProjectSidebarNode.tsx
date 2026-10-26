@@ -1,6 +1,7 @@
 import { memo } from "react";
 import { shallow } from "zustand/shallow";
 import { Plug } from "lucide-react";
+import { isSelfServerHost, useSelfServerHostId } from "@/hooks/useWorkspaceServices.js";
 import type {
   IProjectService,
   IRemoteProjectService,
@@ -72,6 +73,7 @@ export const ProjectSidebarNode = memo(
     const { intl } = useZCodeIntl();
     const confirm = useConfirmDialog();
     const tabStore = useTabStoreApi();
+    const selfServerHostId = useSelfServerHostId();
     const msg = (id: string) => intl.formatMessage({ id: `project.${id}` });
     const sourceServerId = projectSourceServerId(project);
     const { refresh, availability } = display;
@@ -157,8 +159,9 @@ export const ProjectSidebarNode = memo(
             try {
               await service.moveTask({ task, projectId: project.id, hostId: project.hostId });
             } catch (cause) {
+              // 自身服务器项目（zcode --web）同样允许本机式的拖拽建根确认。
               if (
-                project.hostId !== "local" ||
+                !isSelfServerHost(project.hostId, selfServerHostId) ||
                 !String(cause).includes("project.root-confirmation-required")
               )
                 throw cause;

@@ -21,6 +21,12 @@ export type RemoteWorkspaceConnectionOverlay = "disconnected" | "reconnecting";
 
 interface RemoteWorkspaceSessionState {
   baseServices: IServiceAccessor | null;
+  /**
+   * 当前 Source Server 自身的 host 身份（zcode --web 浏览器直连模式）。
+   * 该身份下的 workspace 与项目就是「本机」上下文：服务解析不得按远端目标等待
+   * 连接会话，项目 UI 不得按远端设备处理。桌面端与远控模式保持 null，行为不变。
+   */
+  selfServerHostId: string | null;
   sessionsById: Record<string, RemoteWorkspaceSession>;
   sessionIdByWorkspacePath: Record<string, string>;
   // 之前只按 workspacePath 建索引，同路径不同远端会互相覆盖。
@@ -28,6 +34,7 @@ interface RemoteWorkspaceSessionState {
   sessionIdByWorkspaceIdentity: Record<string, string>;
   connectionOverlayByWorkspaceKey: Record<string, RemoteWorkspaceConnectionOverlay>;
   registerBaseServices: (services: IServiceAccessor) => void;
+  setSelfServerHostId: (hostId: string | null) => void;
   registerSession: (session: RemoteWorkspaceSession) => void;
   unregisterSession: (sessionId: string) => void;
   bindWorkspacePath: (workspacePath: string, sessionId: string) => void;
@@ -40,6 +47,7 @@ interface RemoteWorkspaceSessionState {
 
 export const useRemoteWorkspaceSessionStore = create<RemoteWorkspaceSessionState>()((set) => ({
   baseServices: null,
+  selfServerHostId: null,
   sessionsById: {},
   sessionIdByWorkspacePath: {},
   sessionIdByWorkspaceIdentity: {},
@@ -47,6 +55,10 @@ export const useRemoteWorkspaceSessionStore = create<RemoteWorkspaceSessionState
   registerBaseServices: (services) =>
     set({
       baseServices: services,
+    }),
+  setSelfServerHostId: (hostId) =>
+    set({
+      selfServerHostId: hostId,
     }),
   registerSession: (session) =>
     set((state) => ({
