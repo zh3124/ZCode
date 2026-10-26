@@ -14,12 +14,12 @@ readProjects 只查询项目/roots，不加载任务或触发 Agent，用于目�
 
 旧单 root 投影的 `directoryMatchPath` 按远端 platform 与 readDirectory 的同一 normalize 规则派生，只用于目录匹配。原 root、合成 ID、任务 cwd 与归属保持不变，该值不落库或写入口缓存；等价目录的多个历史 ID 不合并。
 
-readDirectory 是项目选目录的 Host 路由入口：未指定 path 返回所属 Host 的 home，指定 path 沿所属 Host 的项目保存规则 normalize 后复用文件服务 readdir，返回规范化 path 与目录条目，不增加 realpath 或符号链接等价规则。旧远端同样通过已连接设备的 systemService.info 与 fileService.readdir 浏览和验证；路径判定与规范化明确采用远端 platform 对应规则，仍禁止项目新建和组织写入。目录端口由装配层注入；失败拒绝，不新建目录/项目/会话。不依赖桌面平台接口，手机使用同一 RPC。
+readDirectory 是项目选目录的 Host 路由入口：未指定 path 返回所属 Host 的 home，指定 path 沿所属 Host 的项目保存规则 normalize 后复用文件服务 readdir，返回规范化 path 与目录条目，不增加 realpath 或符号链接等价规则。hostId 为空或 `"local"` 一律按本机处理（`"local"` 指服务进程所在机器，即使 ownerHostId 是 remote:server:… 形式的源服务器身份），只有其他 hostId 才要求已连接宿主，缺失即拒绝 `project.host-offline`。旧远端同样通过已连接设备的 systemService.info 与 fileService.readdir 浏览和验证；路径判定与规范化明确采用远端 platform 对应规则，仍禁止项目新建和组织写入。目录端口由装配层注入；失败拒绝，不新建目录/项目/会话。不依赖桌面平台接口，手机使用同一 RPC。
 
 主目录可用性见 `docs/project-primary-root-availability.md`：所属 Host 在 readTree/readProjects 中异步探测主目录，返回可选 primaryRootStatus，不写库、不持久缓存；prepareSession 再次检查，失效直接拒绝，不复活或替换 cwd。侧栏消费同一投影置灰标题并禁用新建入口，标题仍可展开已有任务并读取历史，focus 刷新沿用请求序号；空项目与附加目录失效不误禁用，远端仅经已有 owner attachment 检查。
 
 ## 2026-10-10 远程单目录合同
 
-本地仍允许 0..n roots；可信 ownerHostId 非 local 的持库宿主只允许恰好一个固定 root。远程创建必须有项目，prepareSession、reserveCreatedTask 与 moveTask 不得产生无归属或附加目录；根路径更新和缺 root 拖动在写事务中拒绝。客户端 hostId 不能改变持库身份。历史迁移数据不被裁剪，失败不得部分写入。
+本地仍允许 0..n roots；可信 ownerHostId 非 local 的持库宿主只允许恰好一个固定 root。远程创建必须有项目，prepareSession、reserveCreatedTask 与 moveTask 不得产生无归属或附加目录；根路径更新和缺 root 拖动在写事务中拒绝。客户端 hostId 不能改变持库身份；本机路径（hostId 为空或 `"local"`）下客户端 hostId 是冗余信息，读按本机目录处理、写入库前剥掉，仓库始终按持库身份落库。历史迁移数据不被裁剪，失败不得部分写入。
 
 未归类 Composer 可传 UUID draftId，目录由 Host 在 workspaceDirectory 下确定性派生；并发和重试只准备同一目录。reuseDraft 表示客户端已拿到该目录，缺失时报错，不重新 mkdir。无 draftId 的其他调用保持独立分配，远端仍要求项目；草稿和接纳记录不进入项目数据库。

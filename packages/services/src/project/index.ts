@@ -72,6 +72,18 @@ const saveProjectSchema = z
     "project.restore-roots-required",
   );
 
+/**
+ * 本机路径下客户端 hostId 是冗余身份信息（"local" 或 ownerHostId）：route() 已把其他
+ * hostId 转发给对应宿主，走到本地分支的调用只能指本机。standalone-server（zcode --web）
+ * 的仓库 ownerHostId 是 remote:server:<id>:/ 身份，客户端 "local" 原样透传会被
+ * host-immutable 守卫拒绝，因此入仓前统一剥掉，由仓库按持库身份落库。
+ */
+function stripClientHostId<T extends { hostId?: string }>(input: T): Omit<T, "hostId"> {
+  const rest = { ...input };
+  delete rest.hostId;
+  return rest;
+}
+
 export function createProjectService(options: {
   repository(): Promise<ProjectRepositoryContract>;
   workspaceDirectory: string;
@@ -82,7 +94,12 @@ export function createProjectService(options: {
   afterChange?: () => Promise<void>;
 }): IProjectService {
   const route = async (hostId?: string) => {
-    if (!hostId || hostId === (options.ownerHostId ?? "local")) return null;
+    // standalone-server（zcode --web）的 UI「此电脑」设备固定发送 hostId="local"，而该
+    // 模式下 ownerHostId 是源服务器身份（remote:server:<id>:/）。此前 "local" 被误判为
+    // 需要转发的外部宿主，又因该模式不装配 resolveHost 而抛 project.host-offline，导致
+    // 首个项目的目录浏览（创建项目 → 选择文件夹）不可用。"local" 语义上永远指服务进程
+    // 所在机器，不可能是需要转发的外部宿主，统一按本机处理。
+    if (!hostId || hostId === "local" || hostId === options.ownerHostId) return null;
     if (!options.resolveHost) throw new Error("project.host-offline");
     return options.resolveHost(hostId);
   };
@@ -160,7 +177,11 @@ export function createProjectService(options: {
         }),
       );
       const result = (await options.repository()).saveProject({
-        ...input,
+        // route() 已把非本机 hostId 转发给对应宿主；走到这里说明调用方指的就是本机。
+        // standalone-server（zcode --web）的 UI「此电脑」设备发送 hostId="local"，而仓库
+        // ownerHostId 是 remote:server:<id>:/ 身份，原样透传会被 host-immutable 守卫拒绝；
+        // 本机路径下客户端 hostId 是冗余信息，剥掉后入仓，由仓库按持库身份落库。
+        ...stripClientHostId(input),
         roots,
         ...(input.primaryRoot ? { primaryRoot: normalize(input.primaryRoot) } : {}),
       });

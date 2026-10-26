@@ -241,6 +241,37 @@ it("routes every foreign project operation to its existing owner and never falls
   expect(repository).not.toHaveBeenCalled();
 });
 
+it("treats the web client local device as the owner host when ownerHostId is a remote identity", async () => {
+  const root = await mkdtemp(join(tmpdir(), "project-web-local-"));
+  try {
+    const directories = { home: async () => "/owner", read: vi.fn(async () => []) };
+    const saveProject = vi.fn(async () => ({ id: "web-p" }) as unknown as VirtualProject);
+    const service = createProjectService({
+      repository: async () =>
+        ({ saveProject }) as unknown as ProjectRepositoryContract,
+      workspaceDirectory: root,
+      directories,
+      // zcode --web 独立服务器的持库身份是 remote:server:<id>:/，且不装配 resolveHost。
+      // UI「此电脑」设备发送 hostId="local"：读路径必须回落本机目录而不是误报
+      // host-offline；写路径不能把 "local" 透传给仓库的 host-immutable 守卫。
+      ownerHostId: "remote:server:example:/",
+    });
+    await expect(service.readDirectory({ hostId: "local" })).resolves.toEqual({
+      path: "/owner",
+      entries: [],
+    });
+    expect(directories.read).toHaveBeenCalledWith({ path: "/owner" });
+    await expect(
+      service.saveProject({ hostId: "local", name: "web", roots: [root] }),
+    ).resolves.toMatchObject({ id: "web-p" });
+    expect(saveProject).toHaveBeenCalledWith(
+      expect.not.objectContaining({ hostId: expect.anything() }),
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 it("browses owner directories without touching project storage or admitting a session", async () => {
   const repository = vi.fn();
   const directories = { home: async () => "/owner", read: vi.fn(async () => []) };
