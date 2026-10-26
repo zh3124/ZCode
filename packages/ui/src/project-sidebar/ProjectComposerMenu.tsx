@@ -1,4 +1,5 @@
 import { ComposerSubmissionPendingContext } from "@/project-sidebar/ComposerSubmissionPendingContext.js";
+import { useSelfServerHostId } from "@/hooks/useWorkspaceServices.js";
 import { ChatRemoteFolderSelection } from "@/project-sidebar/ChatRemoteFolderSelection.js";
 import { RemoteIdentityHoverCard } from "@/project-sidebar/RemoteIdentityHoverCard.js";
 import { remoteHostLabel } from "@/project-sidebar/RemoteHostSection.js";
@@ -253,6 +254,11 @@ export function ProjectComposerMenu({
     if (accepted === false) cancelSelection();
   };
   const currentDevice = connectedDevice?.isCurrent() ? connectedDevice : null;
+  const selfServerHostId = useSelfServerHostId();
+  // zcode --web（standalone-server）：服务端策略要求所有会话归属项目
+  // （prepareSession 无项目时拒绝 project.remote-project-required），「不在项目中
+  // 工作」与解除项目绑定在该模式必然失败；隐藏入口，避免点击后静默无反应。
+  const conversationWorkspaceSupported = !selfServerHostId;
   const hostId = workspaceIdentity ? remoteHostIdFromWorkspaceIdentity(workspaceIdentity) : null;
   // 原因：目录可以属于多个项目，tab/cwd 不能决定归属；只读草稿的项目身份。
   const currentProject = projects.find(
@@ -268,6 +274,7 @@ export function ProjectComposerMenu({
     Boolean(service);
   const isConversationWorkspace = !currentProject;
   const canDetachProject =
+    conversationWorkspaceSupported &&
     !hostId &&
     allowConversationWorkspaceSelection &&
     allowConversationWorkspaceDetach &&
@@ -519,7 +526,7 @@ export function ProjectComposerMenu({
                 <span>{intl.formatMessage({ id: "chat.empty.newRemoteConnection" })}</span>
               </DropdownMenuItem>
             ) : null}
-            {allowConversationWorkspaceSelection && !hostId ? (
+            {conversationWorkspaceSupported && allowConversationWorkspaceSelection && !hostId ? (
               <DropdownMenuCheckboxItem
                 data-testid={TID_COMPOSER_WORK_OUTSIDE_PROJECT}
                 checked={isConversationWorkspace}
