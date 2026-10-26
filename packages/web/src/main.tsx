@@ -103,6 +103,10 @@ import {
   markWebRemoteControlTaskRead,
 } from "#src/web-remote-control/index.js";
 import { useRemoteWorkspaceSessionStore } from "@zcode/ui/remote-workspace-session-store";
+import {
+  startWsKeepAlive,
+  type WsKeepAliveHandle,
+} from "#src/webSocketKeepAlive.js";
 
 import {
   WebRemoteControlDeviceListPage,
@@ -2113,11 +2117,25 @@ async function bootstrapWebApp() {
   }
 
   try {
+    let keepAlive: WsKeepAliveHandle | null = null;
     const services = await connectViaWebSocket(bootstrap.wsUrl, {
-      onClose: () => {},
+      onClose: () => {
+        // SocketProtocol 无协议层心跳/重连（见 webSocketKeepAlive 注释）：
+        // close 事件是唯一的被动断线信号，交给看门狗统一恢复。
+        keepAlive?.notifySocketClosed();
+      },
     });
     const platform = createWebPlatform();
     document.title = "ZCode - Web + Server";
+    // 空闲断线看门狗：心跳维持代理空闲计时器；超时/断开时整页 reload 恢复。
+    // reload 后 bootstrap 失败会渲染失败页（无自动重载），不会形成刷新循环。
+    keepAlive = startWsKeepAlive({
+      sendPing: () => services.systemService.info(),
+      recover: (reason) => {
+        console.warn("[web] WebSocket 连接失效，自动刷新恢复", { reason });
+        window.location.reload();
+      },
+    });
     // zcode --web 浏览器直连：记录 Source Server 自身身份，供 workspace 服务解析与
     // 项目 UI 把「服务器自身的 workspace/项目」按本机处理（见 useWorkspaceServices）。
     if (bootstrap.initialWorkspaceIdentity) {
