@@ -113,7 +113,7 @@ import { ServiceProvider, useServices } from "@/hooks/useServices.js";
 import type { AppToolSearchMode } from "@zcode/shared";
 import { useSettings } from "@/hooks/useSettingService.js";
 import type { CreateTaskRequest, RemoteConnectionOpenPreference } from "@/app-shell/types.js";
-import { useBaseWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
+import { useBaseWorkspaceServices, useSelfServerHostId } from "@/hooks/useWorkspaceServices.js";
 import { resolveModelProviderConnectivityWorkspacePath } from "@/lib/modelProviderConnectivityTarget.js";
 import {
   createSettingsPageConfig,
@@ -333,6 +333,8 @@ export function SettingsPage({
     [isDesktop, isMacDesktop, isWindowsDesktop],
   );
   const isLinuxDesktop = Boolean(isDesktop && !isMacDesktop && !isWindowsDesktop);
+  // zcode --web 直连：服务器即本机，「本机 Host」语义成立（记忆查看器等）。
+  const selfServerHostId = useSelfServerHostId();
   const usesInlineWindowControls = Boolean(isWindowsDesktop || isLinuxDesktop);
   const platform = usePlatform();
   const remoteWorkspaceController = useOptionalRemoteWorkspaceController();
@@ -2103,7 +2105,9 @@ export function SettingsPage({
                                 memoryEnabled={memoryEnabled}
                                 memoryService={localHostServices.memoryService}
                                 onMemoryEnabledChange={handleMemoryEnabledChange}
-                                projectMemoryViewerAvailable={Boolean(isDesktop)}
+                                projectMemoryViewerAvailable={
+                                  Boolean(isDesktop) || selfServerHostId !== null
+                                }
                                 workspaceDisplayNames={memoryWorkspaceDisplayNames}
                               />
                             </ServiceProvider>

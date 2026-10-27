@@ -13,8 +13,12 @@ const service = vi.hoisted(() => ({
   }),
   onMessage: () => ({ dispose() {} }),
 }));
-vi.mock("@/hooks/useWorkspaceServices.js", () => ({
+vi.mock("@/hooks/useWorkspaceServices.js", async (importOriginal) => ({
+  // 纯判定函数用真实实现；仅 mock 服务 hook。
+  ...(await importOriginal<typeof import("@/hooks/useWorkspaceServices.js")>()),
   useBaseWorkspaceServices: () => services,
+  // 默认非 web 直连（桌面/远控），自身服务器身份为 null。
+  useSelfServerHostId: () => null,
 }));
 const services = { projectService: service, broadcastService: { onMessage: service.onMessage } };
 afterEach(() => {
@@ -66,5 +70,25 @@ describe("automation virtual project options", () => {
         project("remote", [], { hostId: "remote:server:s" }),
       ]),
     ).toEqual([]);
+  });
+
+  it("includes the source server's own projects in zcode --web direct mode", () => {
+    const self = "remote:server:zh-vm";
+    // web 直连下所有项目都以服务器自身身份落库；不识别会把定时任务的项目
+    // 选项清空（hostId === "local" 过滤无一命中）。
+    expect(
+      resolveAutomationProjectOptions(
+        [
+          project("self", ["/srv/app"], { hostId: self }),
+          project("self-deleted", [], { hostId: self, deleted: true }),
+          project("other-remote", [], { hostId: "remote:server:other" }),
+          project("local", ["/home/dev/p"], {}),
+        ],
+        self,
+      ),
+    ).toEqual([
+      { projectId: "self", hostId: self, workspacePath: "/srv/app", label: "self" },
+      { projectId: "local", hostId: "local", workspacePath: "/home/dev/p", label: "local" },
+    ]);
   });
 });

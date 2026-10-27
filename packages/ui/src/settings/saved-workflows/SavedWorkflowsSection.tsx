@@ -1,4 +1,8 @@
 import { useSavedWorkflowProjectOptions } from "@/project-sidebar/useSavedWorkflowProjectOptions.js";
+import {
+  isSelfServerWorkspaceIdentity,
+  useSelfServerHostId,
+} from "@/hooks/useWorkspaceServices.js";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Plus, Settings2 } from "lucide-react";
 import {
@@ -108,10 +112,19 @@ export function SavedWorkflowsSection({
     openSettingsTab();
   }, [openSettingsTab]);
   const projects = useSavedWorkflowProjectOptions();
+  const selfServerHostId = useSelfServerHostId();
   // 全局组的运行 / 移动落点只能是本机项目：过滤掉远程 workspace。
+  // zcode --web 直连下项目落库身份是 Source Server 自身（带 workspaceIdentity），
+  // 但对本机而言就是本地落点；只按「无 identity」过滤会把选项清空，
+  // 全局工作流的「通过对话创建」因此禁用。
   const localProjects = useMemo(
-    () => projects.filter((project) => !project.workspaceIdentity),
-    [projects],
+    () =>
+      projects.filter(
+        (project) =>
+          !project.workspaceIdentity ||
+          isSelfServerWorkspaceIdentity(project.workspaceIdentity, selfServerHostId),
+      ),
+    [projects, selfServerHostId],
   );
 
   const [view, setView] = useState<SavedWorkflowsView>({ mode: "list" });
