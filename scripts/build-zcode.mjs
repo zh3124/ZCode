@@ -10,6 +10,10 @@ import {
   patchNodePtyPrebuilds,
   stageTuiRuntime,
 } from "./zcode-distribution/assets.mjs";
+import {
+  bundledSkillPackRequiredPaths,
+  bundledSkillPackRootPath,
+} from "../apps/zcode-cli/packages/cli/scripts/sea-bundled-skill-assets.mjs";
 import { installScriptSource } from "./zcode-distribution/installer.mjs";
 
 const root = resolve(import.meta.dirname, "..");
@@ -191,6 +195,22 @@ async function stageZCodePackage({ packageRoot, version }) {
     resolve(packageRoot, "agent/THIRD-PARTY-NOTICES.md"),
   );
   await chmod(resolve(packageRoot, "agent", "zcode.cjs"), 0o755);
+
+  // 内置技能包（bundled-skills，非插件）：Node 发行包不是 SEA 二进制，bootstrap 的
+  // resolveBundledSkillRoots 走 filesystem 模式，沿入口旁的候选目录找
+  // ../bundled-skills（agent/zcode.cjs 的上一级）。漏 stage 它，dynamic-workflows
+  // 技能缺席，CreateWorkflow 等工具拒绝运行——与桌面链 prepare-agent-node-bundle
+  // 的 bundledSkillPack stage 步骤同构（官方 build:zcode 此前缺失该步骤）。
+  // 目录整拷递归 + 必需文件清单复用 SEA 收集器的单一事实源：新增内置技能只需
+  // 放进 packages/bundled-skills/skills/，本脚本自动携带，无需改动。
+  const bundledSkillPackRoot = resolve(root, "apps/zcode-cli", bundledSkillPackRootPath);
+  for (const requiredPath of bundledSkillPackRequiredPaths) {
+    await assertFile(
+      resolve(bundledSkillPackRoot, ...requiredPath.split("/")),
+      `bundled skill pack ${requiredPath}`,
+    );
+  }
+  await cp(bundledSkillPackRoot, resolve(packageRoot, "bundled-skills"), { recursive: true });
 
   await stageTuiRuntime(packageRoot);
   await copyRuntimeNodeModules(packageRoot);
