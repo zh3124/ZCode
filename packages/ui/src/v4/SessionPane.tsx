@@ -4434,15 +4434,49 @@ export function SessionPane({
         branch: "composer-submission-intent",
       });
       handleDraftSelectModel(resolvedProvider, model, reasoningLevel);
+      // 会话内换模型必须同步 agent 会话配置：仅改本地草稿时选择只随下次提交
+      // 生效，切换会话再回来会显示 agent 侧旧配置（回到默认选型/最高档）。
+      if (sessionId && resolvedProvider && model) {
+        void zcodeTaskService
+          .setConfigOption({
+            taskId: sessionId,
+            traceId: `v4-pane:${sessionId}:model:${resolvedProvider}/${model}`,
+            configId: "model",
+            value: `${resolvedProvider}/${model}`,
+          })
+          .catch((error) => {
+            logger.warn("[v4-pane] 会话模型切换同步失败", {
+              sessionId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+      }
     },
-    [activeHighspeedCard, draftConfigRef, handleDraftSelectModel, intl],
+    [activeHighspeedCard, draftConfigRef, handleDraftSelectModel, intl, sessionId, zcodeTaskService],
   );
 
   const handleSelectThought = useCallback(
     (thought: string, _modelContext: { provider: string; model: string }) => {
       handleDraftSelectThought(thought);
+      // 会话内调档同理：只改草稿不同步 agent 时，切回会话显示默认最高档
+      // （zcode --web 实测：调整思考强度→切换会话→回来回到最高）。
+      if (sessionId) {
+        void zcodeTaskService
+          .setConfigOption({
+            taskId: sessionId,
+            traceId: `v4-pane:${sessionId}:thought:${thought}`,
+            configId: "thought_level",
+            value: thought,
+          })
+          .catch((error) => {
+            logger.warn("[v4-pane] 会话思考档位同步失败", {
+              sessionId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+      }
     },
-    [handleDraftSelectThought],
+    [handleDraftSelectThought, sessionId, zcodeTaskService],
   );
 
   const handleRecoverCustomModelSelection = useCallback(

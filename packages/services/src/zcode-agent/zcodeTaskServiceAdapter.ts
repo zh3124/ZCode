@@ -2813,13 +2813,32 @@ export function createZCodeTaskServiceAdapter(
     async setConfigOption(params): Promise<ZCodeConfigOption[]> {
       const target = getTaskTarget(params.taskId);
       if (params.configId === MODEL_CONFIG_ID) {
-        return service.setModel({
-          taskId: params.taskId,
-          traceId: params.traceId,
-          modelSelection: parseModelPickerValue(params.value),
+        // session/setModel → v4 switchModelConfig。legacy session/setModel 对部分
+        // 模型（如 GLM-5.3-Flash）强制要求 reasoning level，仅传 modelSelection
+        // 会以 "Reasoning level is required" 拒绝，模型切换静默失败（web 实测）；
+        // 与 thought_level 分支同一 v4 命令面，thought 取当前会话档位。
+        const current = await options.zcodeAgentService.readSession({
+          workspacePath: target.workspacePath,
+          workspaceIdentity: target.workspaceIdentity,
+          sessionId: params.taskId,
         });
-      }
-      if (params.configId === THOUGHT_LEVEL_CONFIG_ID) {
+        const modelSelection = parseModelPickerValue(params.value);
+        // 会话当前档位；模型不支持思考时回退空串（v4 命令 thought 为必填字符串，
+        // 空串语义 = 沿用目标模型默认档位）。
+        const thought =
+          (current.settings as { thoughtLevel?: { current?: string } }).thoughtLevel?.current ??
+          "";
+        await sendConfigCasCommandV4(
+          target,
+          "switchModelConfig",
+          {
+            provider: modelSelection.providerId,
+            model: modelSelection.modelId,
+            thought,
+          },
+          `session=${params.taskId} model=${modelSelection.providerId}/${modelSelection.modelId}`,
+        );
+      } else if (params.configId === THOUGHT_LEVEL_CONFIG_ID) {
         // session/setThoughtLevel → v4 switchModelConfig（v4 无独立思考深度命令，
         // thought 字段承载；provider/model 取当前会话选型，与桌面 v4 工具条同一命令面）。
         // 同 provider 同 model 直切，不涉及 runtimeModel（provider 凭据）解析——这正是
